@@ -5,12 +5,12 @@ var result = {
     success: false,
     error: null,
     contacts: [],
-    subscriberOnly: false
+    subscriberOnly: null
 };
 var output;
 
 try {
-    var allowedReferrer = {{Origin CloudPage}};
+    var allowedReferrer = {{origin CloudPage Url}};
     var referrer = Platform.Request.ReferrerURL();
 
     if (!referrer || referrer.indexOf(allowedReferrer) === -1) {
@@ -18,14 +18,15 @@ try {
     }
   
     var searchTerm = Request.GetFormField('searchTerm');  
-    var masterDEKey = {{Quell DE}};
-    var subStatusDEKey ={{Zusätzliche DE}};
+    var masterDEKey =  {{Master DE Key}};
+    var subStatusDEKey =  {{Subscriber Data Extension Key}};
+    var engagementDEKey = {{Engagement Data Extension Key}};
 
     if (searchTerm != null && searchTerm != "") {
 
         var columnsToRetrieve = [
             "ContactId", "Email", "Vorname", "Nachname", "Anrede", "PLZ", "Alter",
-            "Interessent", "Teilnehmer", "Absolvent", "Double_Opt_In",
+            "Interessent", "Teilnehmer", "Absolvent", "Email_DOI",
             "Zuletzt_erhalten", "Zuletzt_gesendet_am", "Zuletzt_geoeffnet_am",
             "Zuletzt_geklickt_am", "Aktuelle_Journey", "Letzte_Journeyaktivitaet",
             "Datum_Letzte_Journeyaktivitaet"
@@ -36,6 +37,7 @@ try {
 
         var masterDE    = DataExtension.Init(masterDEKey);
         var subStatusDE = DataExtension.Init(subStatusDEKey);
+        var engagementDE = DataExtension.Init(engagementDEKey);
 
         var filter = null;
 
@@ -48,9 +50,12 @@ try {
         if (filter) {
             var data = masterDE.Rows.Retrieve(filter, columnsToRetrieve);
             var subData = subStatusDE.Rows.Retrieve(filter, ["Status", "Datum_Unsubscribe"]);
-
+      
             if (data && data.length > 0) {
                 // Kontakt im Master-DE gefunden
+    
+                var prox = new Script.Util.WSProxy();
+              
                 for (var i = 0; i < data.length; i++) {
                     var row = data[i];
                     var contact = {
@@ -61,10 +66,10 @@ try {
                         anrede: row.Anrede,
                         plz: row.PLZ,
                         alter: row.Alter,
-                        doubleOptin: (row.Double_Opt_In === "True"),
-                        interessent: (row.Interessent === "True"),
-                        teilnehmer: (row.Teilnehmer === "True"),
-                        absolvent: (row.Absolvent === "True"),
+                        doubleOptin: (row.Email_DOI === "True" ? "Ja" : "Nein"),
+                        interessent: (row.Interessent === "True" ? "Ja" : "Nein"),
+                        teilnehmer: (row.Teilnehmer === "True" ? "Ja" : "Nein"),
+                        absolvent: (row.Absolvent === "True" ? "Ja" : "Nein"),
                         zuletztErhalten: row.Zuletzt_erhalten,
                         zuletztGesendetAm: row.Zuletzt_gesendet_am,
                         zuletztGeoeffnetAm: row.Zuletzt_geoeffnet_am,
@@ -73,13 +78,59 @@ try {
                         letzteJourneyaktivitaet: row.Letzte_Journeyaktivitaet,
                         datumLetzteJourneyaktivitaet: row.Datum_Letzte_Journeyaktivitaet,
                         subscriberStatus: null,
-                        subscriberUnsubscribeDate: null
+                        subscriberUnsubscribeDate: null,
+                        engagementData:  []
                     };
 
                     if (subData && subData.length > 0) {
                         contact.subscriberStatus        = subData[0].Status;
                         contact.subscriberUnsubscribeDate = subData[0].Datum_Unsubscribe;
                     }
+                   
+                  var totalContactEngagement = [];
+
+                  if (contact.contactId) {
+
+                      var cols = ["Email_Name", "Opened", "Clicked", "Send_Date"];
+
+                      var engagementFilter = {
+                          Property: "ContactId",
+                          SimpleOperator: "equals",
+                          Value: contact.contactId
+                      };
+
+                      var response = prox.retrieve(
+                          "DataExtensionObject[" + engagementDEKey + "]",
+                          cols,
+                          engagementFilter
+                      );
+
+                      if (response && response.Results && response.Results.length > 0) {
+                                         
+
+                          for (var j = 0; j < response.Results.length; j++) {
+
+                              var props = response.Results[j].Properties;
+                              var engagementRow = {};
+
+                              for (var k = 0; k < props.length; k++) {
+                                  engagementRow[props[k].Name] = props[k].Value;
+                              }
+
+                              totalContactEngagement.push({
+                                  emailName: engagementRow.Email_Name,
+                                  opened: (engagementRow.Opened === "True" ? "Ja" : "Nein"),
+                                  clicked: (engagementRow.Clicked === "True" ? "Ja" : "Nein"),
+                                  sendDate: engagementRow.Send_Date
+                              });
+                          }
+
+                          contact.engagementData = totalContactEngagement;
+                          contact.engagementData.sort(function(a, b) {
+                              return new Date(b.sendDate) - new Date(a.sendDate);
+                          });
+                      }
+                  }
 
                     result.contacts.push(contact);
                 }
@@ -108,7 +159,6 @@ try {
     }
 
 } catch (e) {
-    // Falls result noch leer wäre, ist es oben bereits initialisiert
     result.success = false;
     result.error = String(e);
 }
